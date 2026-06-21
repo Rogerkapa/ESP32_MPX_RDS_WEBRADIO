@@ -1,330 +1,402 @@
-# PiratESP32 - DSP BASED RDS STEREO ENCODER FOR FM RADIO
+#  ESP32-S3 FM RDS Stereo Encoder
 
-[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/MarcFinns/PiratESP32-FM-RDS-STEREO-ENCODER)
 
-A complete FM stereo encoder with RDS (Radio Data System) support, implemented entirely in software on the ESP32-S3 **(and now ESP32)** microcontroller. This project processes stereo audio in real-time through a sophisticated 24 bit DSP pipeline to generate broadcast-quality FM multiplex signals.
+Software FM stereo encoder with RDS, WebRadio input, external ADC input and ST7789 TFT monitoring, running on ESP32-S3 with Arduino ESP32 core.
 
-**This project was the testbed to benchmark AI-assisted software develpment tools (Anthropic Claude Code and OpenAI Codex)** in a complex setup, beyond the usual precooked demos!
+This project is based on the original **PiratESP32 DSP BASED RDS STEREO ENCODER FOR FM RADIO** project and keeps the same core idea: generate the full FM multiplex signal in software.
 
-**IMPORTANT NOTE:** Some PCM1808 ADC breakout boards from AliExpress have a very aggressive low pass filter (according to the ADC datasheet, the filter is unnecessary and they chose a wrong capacitor value...). This results in a lowpass filter at 6Khz! If sound is muffled, you can just desolder the caps (or break them, it is fine). See explanation and pictures of where these caps are in [ESP32 S3 STEREO DSP](https://github.com/MarcFinns/ESP32-S3-STEREO-DSP)
+The current tree is the evolved ESP32-S3 version used for:
+
+- MP3 WebRadio decoding and ICY metadata
+- FM stereo MPX synthesis
+- RDS PS/RT/CT generation
+- ST7789 TFT splash/VU display
+- External I2S ADC input
+- Diagnostic local sources for DAC/ADC/noise testing
 
 ![In action](Picture.jpeg)
 
-## Features
+## Credits
 
-- **Real-time FM Stereo Encoding**: Stereo audio → FM multiplex (MPX)
-- **RDS Core**: PI/PTY/TP/TA/MS, PS/RT with EU PTY mapping; RT rotation list
-- **Runtime Controls (SCPI/JSON)**: Full CLI for RDS, audio, pilot, and system; JSON replies
-- **Profiles (NVS)**: Save/load named configurations via serial console
-- **Pilot Control**: Enable and auto‑mute on silence (threshold/hold configurable)
-- **Configurable Pre‑emphasis**: 50 µs (EU) or 75 µs
-- **Sophisticated DSP Pipeline**:
-  - Audio sampling at 24 bit
-  - Pre‑emphasis filtering (50/75 µs)
-  - 19 kHz notch filter to prevent pilot tone interference
-  - 4× polyphase FIR upsampling (48 kHz → 192 kHz or 44.1 kHz → 176.4 kHz) with 15KHz LPF
-  - Stereo matrix (L+R mono and L-R difference signals)
-  - Numerically controlled oscillator (NCO) for phase-coherent 19KHz pilot tone, 38 KHz stereo subcarrier, 57 KHz RDS subcarrier
-  - Double sideband suppressed carrier (DSB-SC) modulation of stereo difference signal on digitally synthesised 38 KHz subcarrier
-  - RDS BPSK modulation on digitally synthesised 57 KHz subcarrier
-  - Digital mixing of L+R mono signal, 19KHz pilot, DSB-SC modulated 38 KHz subcarrier, and BPSK modulated 57 KHz subcarrier
-  - MPX audio out via 32 bit DAC at 176.4 kHz or 192 KHz
-  
-- **Real-time VU Meters**: ST7789 TFT display with stereo level monitoring
-- **Dual-Core Architecture**: Four tasks across both cores (DSP/Console/RDS/Display)
-- **Performance Monitoring**: Real-time CPU usage and audio statistics logging
+Original project and architecture:
 
-## Hardware Requirements
+- MarcFinns / PiratESP32-FM-RDS-STEREO-ENCODER
+- ESP32 Arduino Core by Espressif Systems
+- FreeRTOS, integrated in the ESP32 SDK
+- Arduino_GFX library for the ST7789 display
+- ESP32-audio-tools / Helix MP3 decoder for WebRadio playback
 
-The project works with the following components, or even better with the board described in [ESP32 S3 STEREO DSP](https://github.com/MarcFinns/ESP32-S3-STEREO-DSP)
+This working branch was extended and debugged with AI-assisted development using Anthropic Claude Code, OpenAI Codex and user hardware testing.
 
-### ESP32 Board
-- ESP32-S3 or classic ESP32 with dual-core processor
+## Main Features
 
-### Audio Interfaces
-- **ADC**: PCM1808 I2S audio ADC (24 bit, I2S slave)
-- **DAC**: PCM5102A I2S audio DAC (16/24/32 bit, I2S slave)
-- **Master Clock**: 22.579 MHz or 24.576 MHz MCLK for synchronization (ESP32 is I2S master)
+- Real-time FM stereo MPX generation at 192 kHz
+- WebRadio MP3 input with ICY metadata for LCD and RDS RT
+- Source selection with the ESP32-S3 BOOT button
+- Sources:
+  - NJOY
+  - Sunshine Live 128 kbps
+  - Sunshine Live 192 kbps
+  - Virgin Radio Rock 2K
+  - Virgin Radio Rock Classic
+  - External ADC
+  - Test tones
+  - ADC mono diagnostic
+  - Zero DAC diagnostic
+  - ADC raw mono diagnostic
+- NTP time sync, used for RDS Clock-Time group
+- RDS PI/PTY/TP/TA/MS, PS, RT and CT
+- RDS PTY set to POP for current radio/audio sources
+- RDS final 57 kHz narrowing filter using cascaded biquads
+- 19 kHz pilot, 38 kHz L-R and 57 kHz RDS generated coherently from one NCO
+- Stereo matrix:
+  - mono = (L + R) / 2
+  - diff = (L - R) / 2
+- 4x polyphase FIR upsampler, 128 taps
+- 50 us European FM pre-emphasis
+- Startup normalyser for strong WebRadio streams
+- ST7789 320x240 TFT splash, VU meter, time and scrolling "PLAY NOW" text
+- WiFi credentials separated into `secrets.h` so the project can be published without the local password
 
-### Display (Optional)
-- ST7789 320x240 TFT LCD (SPI interface)
-- Used for real-time VU meter visualization and debug messages
+## Current DSP Chain
 
-## Pin Configuration
+Normal audio/WebRadio path:
 
-**NOTE:** Two separate sections in config.h for ESP32-S3 and classic ESP32
-
-
-### I2S Audio 
-```
-Master Clock (shared):  GPIO 8  (22.579 MHz or 24.576 MHz MCLK)
-
-DAC Output:
-  BCK  (Bit Clock):     GPIO 9
-  LRCK (Word Select):   GPIO 11
-  DOUT (Serial Data):   GPIO 10
-
-ADC Input:
-  BCK  (Bit Clock):     GPIO 4
-  LRCK (Word Select):   GPIO 6
-  DIN  (Serial Data):   GPIO 5
-```
-
-### ST7789 TFT Display
-```
-SCK  (SPI Clock):       GPIO 40
-MOSI (SPI Data):        GPIO 41
-DC   (Data/Command):    GPIO 42
-CS   (Chip Select):     GPIO 1
-RST  (Reset):           GPIO 2
+```text
+WebRadio MP3 / ADC input
+        |
+48 kHz stereo float
+        |
+Startup normalyser / temporary measuring attenuation for non-reference streams
+        |
+4x polyphase FIR upsampler and audio low-pass
+        |
+50 us pre-emphasis
+        |
+Stereo matrix: (L+R)/2 and (L-R)/2
+        |
+NCO coherent carriers: 19 kHz, 38 kHz, 57 kHz
+        |
+MPX mix: mono + pilot + L-R DSB-SC + RDS BPSK
+        |
+192 kHz I2S TX to DAC, same MPX on both DAC channels
 ```
 
-## Additional Documentation
+The old 19 kHz notch filter is no longer active in this branch, make clipping on some sources
 
-- Software_Architecture.md — Tasks, cores, queues, modules, pattern
-- SerialConsole.md — SCPI/JSON serial CLI (source of truth)
+## Hardware
 
-## Software Architecture
+### Main Board
 
-### Task Distribution
+- ESP32-S3 N16R8 recommended
+- OPI PSRAM enabled in Arduino board settings
+- 16 MB flash
+- CPU 240 MHz
+- Flash QIO 80 MHz
+- Partition: No OTA / Large App
 
-**Core 0 (Real-Time Audio):**
-- `DSP_pipeline` task (priority 6 - highest)
-- Handles all audio I/O and DSP processing
-- Must maintain strict timing for glitch-free audio
+### Audio
 
-**Core 1 (Non-Real-Time):**
-- `Console` task (priority 2) - Serial owner (CLI) + log draining
-- `VU Meter` task (priority 1) - Display rendering
-- `RDS Assembler` task (priority 1) - RDS bitstream generation
+- I2S DAC, for example PCM5102A
+- I2S ADC, for example PCM1808 / WM8782S style board
+- ESP32-S3 provides MCLK
+- DAC output is the final MPX signal
 
-### Signal Flow
+### Display
 
+- ST7789 320x240 SPI TFT
+- Backlight is hard-wired, not controlled by firmware
+- Color inversion is enabled by `Config::TFT_INVERT_DISPLAY`
+
+## ESP32-S3 Pinout
+
+### I2S TX to DAC
+
+```text
+MCLK  GPIO8   -> DAC SCK / MCLK
+BCK   GPIO9   -> DAC BCK
+LRCK  GPIO11  -> DAC LCK / LRCK / WS
+DOUT  GPIO10  -> DAC DIN
+GND   GND
+3V3   3V3
 ```
-1. I2S RX (stereo ADC input)
-        ↓
-2. Pre-emphasis filter (50 or 75 µs FM standard)
-        ↓
-3. 19 kHz notch filter
-        ↓
-4. 4× polyphase FIR upsampling
-        ↓
-5. Stereo matrix (L+R and L-R signals)
-        ↓
-6. NCO carrier generation (19 kHz pilot, 38 kHz subcarrier, 57 kHz RDS)
-        ↓
-7. MPX synthesis (mono + pilot + stereo + RDS)
-        ↓
-8. I2S TX (DAC output - the DAC is stereo, the same MPX signal is on both outputs)
+
+### I2S RX from ADC
+
+```text
+MCLK  GPIO8   -> ADC SCK / MCLK
+BCK   GPIO4   -> ADC BCK
+LRCK  GPIO6   -> ADC LRC / LRCK / WS
+DIN   GPIO5   <- ADC OUT / DOUT
+GND   GND
+3V3   3V3
 ```
 
-## Installation
+### ST7789 TFT
 
-### Prerequisites
-- [Arduino IDE](https://www.arduino.cc/en/software) 2.x or later
-- [ESP32 Arduino Core](https://github.com/espressif/arduino-esp32)
+```text
+SCK   GPIO40  -> TFT SCK / CLK
+MOSI  GPIO41  -> TFT MOSI / SDA / SDI
+DC    GPIO42  -> TFT DC / RS
+CS    GPIO1   -> TFT CS
+RST   GPIO2   -> TFT RST
+BL    hard-wired, not used by firmware
+MISO  not used
+```
 
-### Libraries Required
-- Arduino GFX Library (https://github.com/moononournation/Arduino_GFX)
+### Source Button
 
+```text
+BOOT  GPIO0
+```
 
-### Compilation
+Short press advances through the input sources. Do not hold BOOT during upload/reset.
 
-1. Clone or download this repository
-2. Open `PiratESP32-FM-RDS-STEREO-ENCODER.ino` in Arduino IDE
-3. Select your ESP32 board:
-   - `Tools → Board → ESP32 Arduino → [Your Board]`
-4. Configure settings:
-   - CPU Frequency: 240 MHz
-   - Flash Size: 4 MB or larger
-   - Partition Scheme: Default or Minimal SPIFFS
-5. Click Upload
+## Source Order
 
-## Configuration
+```text
+NJOY
+Sunshine 128
+Sunshine 192
+Virgin 2K
+Virgin Classic
+ADC
+TEST L/R
+ADC MONO
+ZERO DAC
+ADC RAW MONO
+```
 
-All configuration parameters are centralized in `Config.h`:
+`ZERO DAC` sends absolute digital zero to the DAC. It is useful to separate DAC/ground noise from DSP or source noise.
 
-### Key Parameters
+`ADC RAW MONO` sends ADC left channel directly to both DAC channels, repeated to 192 kHz, without MPX, pilot, RDS, pre-emphasis or FIR. It is a diagnostic path.
+
+## WiFi Secrets
+
+Local credentials are stored in:
+
+```text
+secrets.h
+```
+
+This file is ignored by git.
+
+For GitHub or a clean machine, use:
+
+```text
+secrets.example.h
+```
+
+Copy it to `secrets.h` and fill in:
 
 ```cpp
-// Sample rates
-SAMPLE_RATE_ADC = 48000 or 44100   // Input sample rate (Hz)
-SAMPLE_RATE_DAC = 192000 or 176400 // Output sample rate (Hz)
-
-// Audio processing
-BLOCK_SIZE = 64           // Samples per block (1.33 ms latency)
-PREEMPHASIS_TIME_CONSTANT_US = 50.0f  // 50 µs (EU) or 75 µs (USA)
-ENABLE_PREEMPHASIS = true  // Enable/disable pre-emphasis stage (for testing)
-
-// Multiplex levels
-PILOT_AMP = 0.09f         // Pilot tone amplitude (~9%)
-DIFF_AMP  = 0.90f         // Stereo difference amplitude
-RDS_AMP   = 0.04f         // RDS injection level (~4%)
-
-// MPX component toggles (for measurements/testing)
-ENABLE_AUDIO                   = true // Program audio (L+R and L-R) into MPX
-ENABLE_STEREO_PILOT_19K        = true // 19 kHz pilot tone
-ENABLE_RDS_57K                 = true // 57 kHz RDS subcarrier
-ENABLE_STEREO_SUBCARRIER_38K   = true // 38 kHz stereo subcarrier (L−R DSB)
-TEST_OUTPUT_CARRIERS           = false // If true: Left=19 kHz pilot, Right=38 kHz subcarrier
-
-// Diagnostics (see Config.h for performance logging cadence)
-
-// Display settings
-VU_DISPLAY_ENABLED = true // Enable/disable TFT display
-VU_USE_PEAK_FOR_BAR = true // Peak (true) or RMS (false) mode
+static constexpr const char *SECRET_WIFI_SSID = "YOUR_WIFI_SSID";
+static constexpr const char *SECRET_WIFI_PASS = "YOUR_WIFI_PASSWORD";
 ```
 
-### Task Pinning (Config-controlled)
+`Config.h` reads:
 
-Task-to-core assignment is configured exclusively in `Config.h` and applied at runtime by the SystemContext and each module’s startTask:
-
-```
-// Config.h core selections (0 or 1)
-CONSOLE_CORE   // Console task core
-VU_CORE        // VU display task core
-RDS_CORE       // RDS assembler task core
-DSP_CORE       // DSP pipeline task core
-
-// Related priorities and stacks are also defined in Config.h
-CONSOLE_PRIORITY, VU_PRIORITY, RDS_PRIORITY, DSP_PRIORITY
-CONSOLE_STACK_WORDS, VU_STACK_WORDS, RDS_STACK_WORDS, DSP_STACK_WORDS
+```cpp
+static constexpr const char *WIFI_SSID = SECRET_WIFI_SSID;
+static constexpr const char *WIFI_PASS = SECRET_WIFI_PASS;
 ```
 
-At startup, each module logs its actual core, for example:
-- "Console running on Core X" (Serial)
-- "VUMeter running on Core X"
-- "RDSAssembler running on Core X"
-- "DSP_pipeline running on Core X"
+## Important Config Values
 
-Use these messages and the status panel CPU metrics to verify your pinning after editing `Config.h`.
+Current MPX levels:
 
-### GPIO Pin Customization
-
-Edit pin assignments in `Config.h` to match your hardware.
-
-## Usage
-
-### Basic Operation
-
-1. Connect I2S ADC and DAC to the configured GPIO pins
-2. Connect ST7789 TFT display (if using VU meters)
-3. Power on the ESP32
-4. Audio processing starts automatically
-5. Monitor Serial output (115200 baud) for diagnostics
-
-### RDS Configuration
-
-Use the serial console (Console task) with SCPI-style commands (115200 baud):
-
-Quick start
-- `SYST:LOG:LEVEL OFF`          # silence periodic logs while configuring
-- `RDS:PI 0x52A1`
-- `RDS:PTY POP_MUSIC`           # or a number 0–31
-- `RDS:PS "NJOYLIFE"`
-- `RDS:RT "Artist - Title"`
-- `AUDIO:STEREO 1`              # enable L−R (38 kHz)
-- `PILOT:ENABLE 1`              # enable pilot (19 kHz)
-- `RDS:ENABLE 1`                # enable RDS (57 kHz)
-
-See `docs/SerialConsole.md` for the full command reference.
-
-### Performance Monitoring
-
-Serial console output (every 5 seconds):
-```
-[timestamp] DSP_pipeline: 48000 Hz, CPU 22.5%, Headroom 77.5%
-[timestamp] Peak: L=-12.3 dBFS, R=-14.1 dBFS
+```cpp
+PILOT_AMP = 0.09f;
+DIFF_AMP  = 1.0f;
+RDS_AMP   = 0.027f;
 ```
 
-## Project Structure
-See `docs/Project_Structure.md` for a complete overview of files and folders.
+Current sample rates:
 
-## RDS Groups Implemented
-- Group 0A: PI, flags, PS
-- Group 2A: RT (A/B toggle on change)
-- Group 4A: CT clock-time from NTP when WiFi is available
-
-## Performance
-
-**Typical Processing Metrics:**
-- Block processing time: ~300 µs
-- Available time per block: 1,333 µs (@ 48 kHz, 64 samples)
-- CPU usage: ~52%
-- Headroom: ~48%
-- Latency: 1.33 ms (negligible for audio applications)
-
-**Memory Usage:**
-- DSP_pipeline stack: 12 KB
-- DSP buffers: ~9 KB
-- Console stack: 4 KB
-- VU Meter stack: 4 KB
-
-## Technical Details
-
-### FM Stereo Multiplex Spectrum
-```
-0-15 kHz:    Mono (L+R) - main audio channel
-19 kHz:      Pilot tone (9% modulation) - stereo indicator
-23-53 kHz:   Stereo subcarrier (L-R, DSB-SC modulated on 38 kHz)
-57 kHz:      RDS data (1187.5 bps, BPSK modulation)
+```cpp
+SAMPLE_RATE_ADC = 48000;
+UPSAMPLE_FACTOR = 4;
+SAMPLE_RATE_DAC = 192000;
+BLOCK_SIZE      = 64;
 ```
 
-### DSP Specifications
-- **Pre-emphasis**: 1st-order IIR high-pass, 50 µs time constant
-- **Notch filter**: 2nd-order IIR, 19 kHz center, Q=0.98
-- **Upsampler**: 96-tap polyphase FIR (15 kHz LPF), 4× interpolation
-- **NCO**: Phase-accumulator synthesis, coherent harmonics
+Current upsampler:
 
-### Real-Time Constraints
-- Block size: 64 samples @ 48 kHz = 1.33 ms available time
-- Target CPU: <30% (leaves 70% headroom for jitter tolerance)
-- All processing must complete within 1.33 ms to avoid audio glitches
+```cpp
+FIR_TAPS = 128;
+FIR_TAPS_PER_PHASE = 32;
+```
+
+Current normalyser behavior:
+
+```cpp
+STARTUP_NORMALYSER_ENABLED = true;
+STARTUP_NORMALYSER_MEASURE_MS = 6000;
+STARTUP_NORMALYSER_TARGET_RMS = 0.11f;
+STARTUP_NORMALYSER_MEASURING_GAIN = 0.50f;
+STARTUP_NORMALYSER_GAIN_RAMP_MS = 1000;
+```
+
+NJOY is treated as the reference stream and is not raised by the normalyser. Other WebRadio streams are measured at their real level, but while measuring they are sent to the DAC with temporary attenuation to avoid clipping. After measurement, the calculated gain is applied with a short ramp.
+
+## Task Layout
+
+### Core 0
+
+- `DSP_pipeline`
+- Priority 6
+- Real-time audio/DSP/MPX/I2S TX
+
+### Core 1
+
+- `WebRadioInput`
+- Priority 5
+- MP3 decode, HTTP stream and PCM ringbuffer
+
+- `Console`
+- Priority 2
+- Serial CLI and logging
+
+- `DisplayManager`
+- Priority 1
+- ST7789 VU display
+
+- `RDSAssembler`
+- Priority 1
+- RDS group/bit generation
+
+## File Structure
+
+Main Arduino entry:
+
+```text
+PiratESP32-FM-RDS-STEREO-ENCODER.ino
+```
+
+Core modules:
+
+```text
+Config.h                 Central configuration
+secrets.h                Local WiFi credentials, ignored by git
+secrets.example.h        Public credentials template
+DSP_pipeline.*           Audio DSP chain and MPX generation
+WebRadioInput.*          WebRadio streams, source button, PCM ringbuffer
+ESP32I2SDriver.*         Hardware driver wrapper
+I2SDriver.*              ESP32 I2S setup
+DisplayManager.*         ST7789 splash/VU/time/RDS text display
+RDSAssembler.*           RDS group builder and bit queue
+RDSSynth.*               RDS baseband shaping, 57 kHz modulation/filter
+NCO.*                    Coherent 19/38/57 kHz oscillator
+StereoMatrix.*           (L+R)/2 and (L-R)/2 matrix
+PolyphaseFIRUpsampler.*  4x FIR upsampler
+PreemphasisFilter.*      FM pre-emphasis
+Console.*                SCPI/JSON serial console
+TimeSync.*               NTP for Portugal and RDS CT
+```
+
+
+## Serial Console
+
+Serial runs at 115200 baud.
+
+Useful examples:
+
+```text
+RDS:PS "xxxxxxxx"
+RDS:PTY POP_MUSIC
+RDS:RT "Artist - Title"
+AUDIO:STEREO 1
+AUDIO:STEREO 0
+AUDIO:PREEMPH 1
+PILOT:ENABLE 1
+RDS:ENABLE 1
+SYST:LOG:LEVEL INFO
+SYST:LOG:LEVEL OFF
+```
+
+Redirect messages such as:
+
+```text
+URLStream.h : 336 - Redirected to:
+```
+
+are normal for WebRadio servers. They mean the stream URL was redirected to the active CDN endpoint.
+
+## Build Notes
+
+Known good Arduino settings for the current ESP32-S3 setup:
+
+```text
+Board: ESP32-S3 N16R8 or equivalent
+CPU Frequency: 240 MHz
+Flash: 16 MB
+PSRAM: OPI PSRAM enabled
+Partition: No OTA / Large App
+Events run on: Core 1
+Upload speed: 921600 usually works
+```
+
+Required libraries include:
+
+```text
+Arduino_GFX_Library
+ESP32-audio-tools
+ESP-DSP
+ESP32 Arduino Core
+```
+
+The project currently uses Arduino IDE/classic ESP32 Arduino core paths on the development machine. `arduino-cli` may not be installed.
 
 ## Troubleshooting
 
-**No audio output:**
-- Check I2S pin connections
-- Verify MCLK is running at 24.576 MHz
-- Check Serial console for I2S initialization errors
+### No WiFi
 
-**Audio glitches/dropouts:**
-- Reduce CPU load by disabling diagnostics (`DIAGNOSTIC_PRINT_INTERVAL = 0`)
-- Check Serial console for CPU usage >80%
-- Disable TFT display if not needed (`VU_DISPLAY_ENABLED = false`)
+- Check `secrets.h`
+- Confirm `SECRET_WIFI_SSID` and `SECRET_WIFI_PASS`
+- Do not commit `secrets.h`
 
-**Display not working:**
-- Verify ST7789 pin connections
-- Check SPI interface is not shared with other devices
-- Try toggling `TFT_ROTATION` setting (0-3)
+### WebRadio plays briefly then stops
 
-**RDS not transmitting:**
-- Verify `ENABLE_RDS_57K = true` in Config.h
-- Check RDS amplitude (`RDS_AMP`) - typical range 0.02-0.04
-- Monitor Serial console for RDS Assembler task errors
+- Confirm PSRAM is enabled in Arduino board settings
+- Confirm partition is No OTA / Large App
+- Check Serial for stream timeout, connect failed or memory allocation errors
+
+### No MPX/audio at DAC
+
+- Check DAC I2S pins
+- Check MCLK GPIO8 at 24.576 MHz
+- Check BCK GPIO9 at 12.288 MHz
+- Check LRCK GPIO11 at 192 kHz
+
+### ADC source noise
+
+- Ground the ADC input before the coupling capacitor to separate board/input noise from firmware noise
+- Use `ZERO DAC` and `ADC RAW MONO` sources for comparison
+- Add input impedance/termination as required by the ADC board
+
+### Display colors inverted
+
+- Toggle `TFT_INVERT_DISPLAY` in `Config.h`
+
+## Notes
+
+- This is an experimental educational project.
+- Check local regulations before transmitting any RF signal.
+- The DAC outputs MPX baseband. Use appropriate filtering, level calibration and legal RF equipment.
 
 ## License
 
 This project is provided as-is for educational and non-commercial use. Refer to individual library licenses for third-party components.
 
-## Credits
-
-Developed for ESP32 platform using:
-- ESP32 Arduino Core by Espressif Systems
-- Adafruit GFX Library
-- FreeRTOS (integrated in ESP32 SDK)
-
-## Contributing
-
-Contributions are welcome! Areas for improvement:
-- Support for 75 µs pre-emphasis (North American standard)
-- Additional RDS features (AF, CT, EON)
-- Web interface for RDS configuration
-- Automatic gain control (AGC)
-- Stereo width control
-
 ## References
 
-- [FM Broadcasting Standards](https://en.wikipedia.org/wiki/FM_broadcasting)
-- [RDS/RBDS Protocol](https://en.wikipedia.org/wiki/Radio_Data_System)
-- [ESP32 I2S Documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/i2s.html)
+- [FM broadcasting](https://en.wikipedia.org/wiki/FM_broadcasting)
+- [Radio Data System](https://en.wikipedia.org/wiki/Radio_Data_System)
+- [ESP32 I2S documentation](https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-reference/peripherals/i2s.html)
+- [ESP32 Arduino Core](https://github.com/espressif/arduino-esp32)
+
+
+
+
+
+
